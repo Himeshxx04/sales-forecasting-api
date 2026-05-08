@@ -7,10 +7,10 @@ from src.data_processing import prepare_data, get_all_states
 
 router = APIRouter()
 
-# load data once at startup so we know the last date in the series
-# (needed to label forecast dates correctly)
+# in-memory caches — loaded once on first use, reused on every subsequent request
 _df = None
 _states = []
+_model_cache = {}   # {state_name: model_object}
 
 
 def get_df():
@@ -19,6 +19,13 @@ def get_df():
         _df = prepare_data()
         _states = get_all_states(_df)
     return _df, _states
+
+
+def get_model(state):
+    """Load model from disk on first call, return cached version after that."""
+    if state not in _model_cache:
+        _model_cache[state] = load_model(state)
+    return _model_cache[state]
 
 
 @router.get("/health", response_model=HealthResponse, tags=["System"])
@@ -55,7 +62,6 @@ def list_models():
 def model_info(state: str):
     """Returns which model won for a specific state and the RMSE comparison."""
     registry = get_registry()
-    # case-insensitive match
     matched = next((k for k in registry if k.lower() == state.lower()), None)
     if not matched:
         raise HTTPException(
@@ -78,13 +84,12 @@ def forecast(req: ForecastRequest):
     """
     df, states = get_df()
 
-    # case-insensitive match so 'california' works too
     matched_state = next((s for s in states if s.lower() == req.state.lower()), None)
     if not matched_state:
         raise HTTPException(status_code=404, detail=f"State '{req.state}' not found in dataset.")
 
     try:
-        model = load_model(matched_state)
+        model = get_model(matched_state)
     except FileNotFoundError:
         raise HTTPException(
             status_code=503,
@@ -93,7 +98,6 @@ def forecast(req: ForecastRequest):
 
     preds = model.predict(req.weeks)
 
-    # figure out what dates correspond to the forecast weeks
     last_date = df[df["State"] == matched_state]["Date"].max()
     forecast_dates = [last_date + pd.Timedelta(weeks=i + 1) for i in range(req.weeks)]
 
