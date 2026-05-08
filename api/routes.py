@@ -1,9 +1,14 @@
+import logging
+import traceback
+
 import pandas as pd
 from fastapi import APIRouter, HTTPException
 
 from api.schemas import ForecastRequest, ForecastResponse, WeeklyForecast, ModelInfo, HealthResponse
 from src.model_selector import load_model, get_registry
 from src.data_processing import prepare_data, get_all_states
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -96,7 +101,11 @@ def forecast(req: ForecastRequest):
             detail=f"Model for '{matched_state}' not trained yet. Run train.py first.",
         )
 
-    preds = model.predict(req.weeks)
+    try:
+        preds = model.predict(req.weeks)
+    except Exception as e:
+        logger.error(f"Prediction failed for {matched_state}: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Prediction error for {matched_state}: {str(e)}")
 
     last_date = df[df["State"] == matched_state]["Date"].max()
     forecast_dates = [last_date + pd.Timedelta(weeks=i + 1) for i in range(req.weeks)]
